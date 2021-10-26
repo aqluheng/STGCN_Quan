@@ -7,7 +7,14 @@ from mmcv.runner import Runner
 from mmcv import Config, ProgressBar
 from mmcv.parallel import MMDataParallel
 from time import time
+import os
 
+def print_size_of_model(model, label=""):
+    torch.save(model.state_dict(), "temp.p")
+    size=os.path.getsize("temp.p")
+    print("model: ",label,' \t','Size (KB):', size/1e3)
+    os.remove('temp.p')
+    return size
 
 def test(model_cfg,
          dataset_cfg,
@@ -37,11 +44,19 @@ def test(model_cfg,
     else:
         model = call_obj(**model_cfg)
     load_checkpoint(model, checkpoint, map_location='cpu')
-    # model = MMDataParallel(model, device_ids=range(gpus)).cuda()
-    model = MMDataParallel(model)
-    model_int8 = torch.quantization.quantize_dynamic(model,{torch.nn.Conv2d},dtype=torch.qint8)
-    model = model_int8
     model.eval()
+    print(model)
+    model_int8 = torch.quantization.quantize_dynamic(model,{torch.nn.Conv2d,},dtype=torch.qint8)
+    f=print_size_of_model(model,"fp32")
+    q=print_size_of_model(model_int8,"int8")
+    print("{0:.2f} times smaller".format(f/q))
+
+    model = model_int8
+    model = MMDataParallel(model, device_ids=range(gpus)).cuda()
+    # model = MMDataParallel(model)
+    # model = model_int8.cuda()
+    print(model)
+    
 
     results = []
     labels = []
