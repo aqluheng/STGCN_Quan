@@ -6,6 +6,7 @@ from mmskeleton.utils import call_obj, import_obj, load_checkpoint
 from mmcv.runner import Runner
 from mmcv import Config, ProgressBar
 from mmcv.parallel import MMDataParallel
+from time import time
 
 
 def test(model_cfg,
@@ -36,24 +37,33 @@ def test(model_cfg,
     else:
         model = call_obj(**model_cfg)
     load_checkpoint(model, checkpoint, map_location='cpu')
-    model = MMDataParallel(model, device_ids=range(gpus)).cuda()
+    # model = MMDataParallel(model, device_ids=range(gpus)).cuda()
+    model = MMDataParallel(model)
+    model_int8 = torch.quantization.quantize_dynamic(model,{torch.nn.Conv2d},dtype=torch.qint8)
+    model = model_int8
     model.eval()
 
     results = []
     labels = []
+    evaluateTime = 0
     prog_bar = ProgressBar(len(dataset))
+
     for data, label in data_loader:
+        evaluateTime -= time()
         with torch.no_grad():
             output = model(data)
             output = model(data).data.cpu().numpy()
+        evaluateTime += time()
 
         results.append(output)
         labels.append(label)
         for i in range(len(data)):
             prog_bar.update()
+
     results = np.concatenate(results)
     labels = np.concatenate(labels)
 
+    print('Evalute Time:',evaluateTime)
     print('Top 1: {:.2f}%'.format(100 * topk_accuracy(results, labels, 1)))
     print('Top 5: {:.2f}%'.format(100 * topk_accuracy(results, labels, 5)))
 

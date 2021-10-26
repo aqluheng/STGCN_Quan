@@ -1,9 +1,10 @@
 # The based unit of graph convolutional networks.
 # This is the original implementation for ST-GCN papers.
 
+from time import time
 import torch
 import torch.nn as nn
-
+import numpy as np
 
 class ConvTemporalGraphical(nn.Module):
     r"""The basic module for applying a graph convolution.
@@ -55,14 +56,43 @@ class ConvTemporalGraphical(nn.Module):
 
     def forward(self, x, A):
         assert A.size(0) == self.kernel_size
+        torch.cuda.synchronize()
+        ComTime = 0
+        ComTime -= time()
+        inputX = x.cpu().numpy()[0]
+        inputX = inputX.transpose((1,0,2))
+        inputX = inputX.reshape((300,-1))
+        print(inputX.shape)
+
 
         x = self.conv(x)
+        outputX = x.cpu().numpy()[0]
+        outputX = outputX.transpose((1,0,2))
+        outputX = outputX.reshape((300,-1))
+        print(outputX.shape)
+
+        with open("matrixWeight.csv","w") as f:
+            np.savetxt(f,self.conv.weight.squeeze().cpu().numpy(),fmt="%d",delimiter=",")
+
+        with open("inputActivation.csv","w") as f:
+            np.savetxt(f,inputX,fmt="%d",delimiter=",")
+
+        with open("outputActivation.csv","w") as f:
+            np.savetxt(f,outputX,fmt="%d",delimiter=",")
+
+        exit()
+        torch.cuda.synchronize()
+        ComTime += time()
 
         n, kc, t, v = x.size()
         x = x.view(n, self.kernel_size, kc // self.kernel_size, t, v)
+        AggTime = 0
+        torch.cuda.synchronize()
+        AggTime -= time()
         x = torch.einsum('nkctv,kvw->nctw', (x, A))
-
-        return x.contiguous(), A
+        torch.cuda.synchronize()
+        AggTime += time()
+        return x.contiguous(), A, ComTime ,AggTime
 
 
 class Gconv(nn.Module):
