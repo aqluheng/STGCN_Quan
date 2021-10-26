@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+from time import time
 
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
@@ -13,7 +14,12 @@ def zero(x):
 def iden(x):
     return x
 
-
+CountNum = 0
+timeGCN = 0
+timeTCN = 0
+timeAGG = 0
+timeCOM = 0
+TotalGCNTime = 0
 class ST_GCN_18(nn.Module):
     r"""Spatial temporal graph convolutional networks.
 
@@ -41,7 +47,6 @@ class ST_GCN_18(nn.Module):
                  data_bn=True,
                  **kwargs):
         super().__init__()
-
         # load graph
         self.graph = Graph(**graph_cfg)
         A = torch.tensor(self.graph.A,
@@ -87,6 +92,7 @@ class ST_GCN_18(nn.Module):
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
 
     def forward(self, x):
+
         # data normalization
         N, C, T, V, M = x.size()
         x = x.permute(0, 4, 3, 1, 2).contiguous()
@@ -96,9 +102,12 @@ class ST_GCN_18(nn.Module):
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
+        global TotalGCNTime 
+        TotalGCNTime -= time()
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, self.A * importance)
+        TotalGCNTime += time()
 
         # global pooling
         x = F.avg_pool2d(x, x.size()[2:])
@@ -107,7 +116,17 @@ class ST_GCN_18(nn.Module):
         # prediction
         x = self.fcn(x)
         x = x.view(x.size(0), -1)
-
+        global CountNum
+        CountNum += 1
+        if CountNum == 620:
+            global timeGCN
+            global timeTCN
+            global timeAGG
+            global timeCOM
+            print("GCNTime",timeGCN)
+            print("TCNTime",timeTCN)
+            print("AGGTime",timeAGG)
+            print("CombineTime",timeCOM)
         return x
 
     def extract_feature(self, x):
@@ -207,9 +226,23 @@ class st_gcn_block(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x, A):
-
+        global timeGCN
+        global timeTCN
+        global timeAGG
+        global timeCOM
         res = self.residual(x)
-        x, A = self.gcn(x, A)
+
+        torch.cuda.synchronize()
+        timeGCN -= time()
+        x, A, tmpComTime, tmpAggTime = self.gcn(x, A)
+        torch.cuda.synchronize()
+        timeGCN += time()
+        timeAGG += tmpAggTime
+        timeCOM += tmpComTime
+        torch.cuda.synchronize()
+        timeTCN -= time()
         x = self.tcn(x) + res
+        torch.cuda.synchronize()
+        timeTCN += time()
 
         return self.relu(x), A
