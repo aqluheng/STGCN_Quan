@@ -8,6 +8,9 @@ from mmcv import Config, ProgressBar
 from mmcv.parallel import MMDataParallel
 from time import time
 import os
+from torch.quantization import QuantStub, DeQuantStub
+import torch.nn as nn
+from torch.quantization import prepare,convert
 
 def print_size_of_model(model, label=""):
     torch.save(model.state_dict(), "temp.p")
@@ -15,6 +18,18 @@ def print_size_of_model(model, label=""):
     print("model: ",label,' \t','Size (KB):', size/1e3)
     os.remove('temp.p')
     return size
+
+class QuantModel(nn.Module):
+    def __init__(self,model):
+        super().__init__()
+        self.model = model
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
+
+    def forward(self,X):
+        X = self.quant(X)
+        X = self.model(X)
+        X = self.dequant(X)
 
 def test(model_cfg,
          dataset_cfg,
@@ -43,20 +58,43 @@ def test(model_cfg,
         model = torch.nn.Sequential(*model)
     else:
         model = call_obj(**model_cfg)
-    load_checkpoint(model, checkpoint, map_location='cpu')
-    model.eval()
-    print(model)
-    model_int8 = torch.quantization.quantize_dynamic(model,{torch.nn.Conv2d,},dtype=torch.qint8)
-    f=print_size_of_model(model,"fp32")
-    q=print_size_of_model(model_int8,"int8")
-    print("{0:.2f} times smaller".format(f/q))
 
-    model = model_int8
-    model = MMDataParallel(model, device_ids=range(gpus)).cuda()
-    # model = MMDataParallel(model)
-    # model = model_int8.cuda()
-    print(model)
-    
+    # modelQuant =  torch.jit.load("quantSTGCN.pth")
+    # results = []
+    # labels = []
+    # evaluateTime = 0
+    # prog_bar = ProgressBar(len(dataset))
+
+    # for data, label in data_loader:
+    #     data = data.cpu()
+    #     evaluateTime -= time()
+    #     with torch.no_grad():
+    #         output = modelQuant(data).data.cpu().numpy()
+    #     evaluateTime += time()
+
+    #     results.append(output)
+    #     labels.append(label)
+    #     for i in range(len(data)):
+    #         prog_bar.update()
+    # exit()
+    modelQuant = QuantModel(model)
+    modelQuant.eval()
+    modelQuant.qconfig = torch.quantization.default_qconfig
+    load_checkpoint(modelQuant.model, checkpoint, map_location='cpu')
+
+    prepare(modelQuant,inplace=True)
+    cnt = 0
+    for data,label in data_loader:
+        with torch.no_grad():
+            output = modelQuant(data)
+            cnt += 1
+            print(cnt)
+            if cnt >= 20:
+                break
+    convert(modelQuant,inplace=True)
+    # torch.jit.save(torch.jit.script(modelQuant),"quantSTGCN.pth")
+    # exit()
+    modelQuant = MMDataParallel(modelQuant, device_ids=range(gpus)).cpu()
 
     results = []
     labels = []

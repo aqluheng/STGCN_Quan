@@ -102,12 +102,12 @@ class ST_GCN_18(nn.Module):
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
-        global TotalGCNTime 
-        TotalGCNTime -= time()
+        # global TotalGCNTime 
+        # TotalGCNTime -= time()
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, self.A * importance)
-        TotalGCNTime += time()
+        # TotalGCNTime += time()
 
         # global pooling
         x = F.avg_pool2d(x, x.size()[2:])
@@ -116,17 +116,17 @@ class ST_GCN_18(nn.Module):
         # prediction
         x = self.fcn(x)
         x = x.view(x.size(0), -1)
-        global CountNum
-        CountNum += 1
-        if CountNum == 620:
-            global timeGCN
-            global timeTCN
-            global timeAGG
-            global timeCOM
-            print("GCNTime",timeGCN)
-            print("TCNTime",timeTCN)
-            print("AGGTime",timeAGG)
-            print("CombineTime",timeCOM)
+        # global CountNum
+        # CountNum += 1
+        # if CountNum == 620:
+        #     global timeGCN
+        #     global timeTCN
+        #     global timeAGG
+        #     global timeCOM
+        #     print("GCNTime",timeGCN)
+        #     print("TCNTime",timeTCN)
+        #     print("AGGTime",timeAGG)
+        #     print("CombineTime",timeCOM)
         return x
 
     def extract_feature(self, x):
@@ -226,23 +226,24 @@ class st_gcn_block(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x, A):
-        global timeGCN
-        global timeTCN
-        global timeAGG
-        global timeCOM
+        # global timeGCN
+        # global timeTCN
+        # global timeAGG
+        # global timeCOM
         res = self.residual(x)
 
-        torch.cuda.synchronize()
-        timeGCN -= time()
-        x, A, tmpComTime, tmpAggTime = self.gcn(x, A)
-        torch.cuda.synchronize()
-        timeGCN += time()
-        timeAGG += tmpAggTime
-        timeCOM += tmpComTime
-        torch.cuda.synchronize()
-        timeTCN -= time()
+        # torch.cuda.synchronize()
+        # timeGCN -= time()
+        # x, A, tmpComTime, tmpAggTime = self.gcn(x, A)
+        x, A = self.gcn(x, A)
+        # torch.cuda.synchronize()
+        # timeGCN += time()
+        # timeAGG += tmpAggTime
+        # timeCOM += tmpComTime
+        # torch.cuda.synchronize()
+        # timeTCN -= time()
         x = self.tcn(x) + res
-        torch.cuda.synchronize()
-        timeTCN += time()
+        # torch.cuda.synchronize()
+        # timeTCN += time()
 
         return self.relu(x), A
