@@ -5,14 +5,20 @@ from torch.autograd import Variable
 from time import time
 
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
+from torch.quantization import QuantStub, DeQuantStub
+
 
 
 def zero(x):
     return 0
 
+def zeroTensor(x):
+    x[:] = 0 
+    return x
 
 def iden(x):
     return x
+
 
 CountNum = 0
 timeGCN = 0
@@ -20,6 +26,8 @@ timeTCN = 0
 timeAGG = 0
 timeCOM = 0
 TotalGCNTime = 0
+
+
 class ST_GCN_18(nn.Module):
     r"""Spatial temporal graph convolutional networks.
 
@@ -39,6 +47,7 @@ class ST_GCN_18(nn.Module):
             :math:`V_{in}` is the number of graph nodes,
             :math:`M_{in}` is the number of instance in a frame.
     """
+
     def __init__(self,
                  in_channels,
                  num_class,
@@ -58,8 +67,8 @@ class ST_GCN_18(nn.Module):
         spatial_kernel_size = A.size(0)
         temporal_kernel_size = 9
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
-        self.data_bn = nn.BatchNorm1d(in_channels *
-                                      A.size(1)) if data_bn else iden
+        # self.data_bn = nn.BatchNorm1d(in_channels * A.size(1)) if data_bn else iden
+        self.data_bn = nn.BatchNorm2d(in_channels * A.size(1)) if data_bn else iden
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
         self.st_gcn_networks = nn.ModuleList((
             st_gcn_block(in_channels,
@@ -89,20 +98,20 @@ class ST_GCN_18(nn.Module):
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
         # fcn for prediction
-        self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
+        self.fcn =nn.Conv2d(256, num_class, kernel_size=1)
 
     def forward(self, x):
-
         # data normalization
         N, C, T, V, M = x.size()
         x = x.permute(0, 4, 3, 1, 2).contiguous()
         x = x.view(N * M, V * C, T)
-        x = self.data_bn(x)
+        # x = self.data_bn(x)
+        x = self.data_bn(x.unsqueeze(-1)).squeeze(-1)
         x = x.view(N, M, V, C, T)
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
-        # global TotalGCNTime 
+        # global TotalGCNTime
         # TotalGCNTime -= time()
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
@@ -140,7 +149,7 @@ class ST_GCN_18(nn.Module):
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
-        # forwad
+        # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, self.A * importance)
 
@@ -178,6 +187,7 @@ class st_gcn_block(nn.Module):
             :math:`V` is the number of graph nodes.
 
     """
+
     def __init__(self,
                  in_channels,
                  out_channels,
@@ -222,9 +232,14 @@ class st_gcn_block(nn.Module):
                           stride=(stride, 1)),
                 nn.BatchNorm2d(out_channels),
             )
-
         self.relu = nn.ReLU(inplace=True)
 
+    def forward(self, x, A):
+        res = self.residual(x)
+        x, A = self.gcn(x, A)
+        x = self.tcn(x) + res
+        return x 
+    '''
     def forward(self, x, A):
         # global timeGCN
         # global timeTCN
@@ -242,8 +257,10 @@ class st_gcn_block(nn.Module):
         # timeCOM += tmpComTime
         # torch.cuda.synchronize()
         # timeTCN -= time()
-        x = self.tcn(x) + res
+        x = self.tcn(x)
+        x = x + res
         # torch.cuda.synchronize()
         # timeTCN += time()
 
         return self.relu(x), A
+    '''

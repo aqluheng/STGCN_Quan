@@ -36,11 +36,11 @@ transform_train = transforms.Compose([
 transform_test = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
 # test = vgg16Quan()
-dataset_train = torchvision.datasets.CIFAR100(".", train=True, transform=transform_train)
+dataset_train = torchvision.datasets.CIFAR100("~/datasets/", train=True, transform=transform_train)
 train_sampler = torch.utils.data.RandomSampler(dataset_train)
 data_loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=500, sampler=train_sampler)
 
-dataset_test = torchvision.datasets.CIFAR100(".", train=False, transform=transform_test)
+dataset_test = torchvision.datasets.CIFAR100("~/datasets/", train=False, transform=transform_test)
 test_sampler = torch.utils.data.RandomSampler(dataset_test)
 data_loader_test = torch.utils.data.DataLoader(dataset_test, batch_size=500, sampler=test_sampler)
 
@@ -121,6 +121,7 @@ def test_quant(path):
             if cnt >= 20:
                 break
     torch.quantization.convert(vggQuant, inplace=True)
+    torch.save({"state_dict":vggQuant.state_dict()},"vgg16Quant.state_dict")
     total = 0
     correct = 0
     with torch.no_grad():
@@ -131,7 +132,7 @@ def test_quant(path):
             total += target.size(0)
             correct += (predicted == target).sum().item()
     print(correct/total*100.0)
-    torch.jit.save(torch.jit.script(vggQuant),"vggQuant.pth")
+    # torch.jit.save(torch.jit.script(vggQuant),"vggQuant.pth")
     return vggQuant
 
 

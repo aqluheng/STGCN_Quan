@@ -8,28 +8,59 @@ from mmcv import Config, ProgressBar
 from mmcv.parallel import MMDataParallel
 from time import time
 import os
-from torch.quantization import QuantStub, DeQuantStub
 import torch.nn as nn
-from torch.quantization import prepare,convert
+from torch.quantization import prepare, convert
+import mmskeleton
+
 
 def print_size_of_model(model, label=""):
     torch.save(model.state_dict(), "temp.p")
-    size=os.path.getsize("temp.p")
-    print("model: ",label,' \t','Size (KB):', size/1e3)
+    size = os.path.getsize("temp.p")
+    print("model: ", label, ' \t', 'Size (KB):', size/1e3)
     os.remove('temp.p')
     return size
 
-class QuantModel(nn.Module):
-    def __init__(self,model):
-        super().__init__()
-        self.model = model
-        self.quant = QuantStub()
-        self.dequant = DeQuantStub()
 
-    def forward(self,X):
-        X = self.quant(X)
-        X = self.model(X)
-        X = self.dequant(X)
+def quantCalibrateModel(model, dataset_cfg, path, nCalibrateBatch = 200):
+    dataset_train_cfg = dataset_cfg.copy()
+    dataset_train_cfg["data_path"] = "./data/Kinetics/kinetics-skeleton/train_data.npy"
+    dataset_train_cfg["label_path"] = "./data/Kinetics/kinetics-skeleton/train_label.pkl"
+    dataset_train_cfg["random_choose"] = True
+    dataset_train_cfg["random_move"] = True
+    dataset_train_cfg["window_size"] = 150
+    dataset_train = call_obj(**dataset_train_cfg)
+    data_loader_train = torch.utils.data.DataLoader(dataset=dataset_train,
+                                                    batch_size=64,
+                                                    shuffle=True,
+                                                    num_workers=4)
+    model.qconfig = torch.quantization.default_qconfig
+    model.eval()
+    prepare(model, inplace=True)
+    prog_bar = ProgressBar(nCalibrateBatch)
+    cnt = 0
+    for data, label in data_loader_train:
+        with torch.no_grad():
+            if cnt >= nCalibrateBatch:
+                break
+            data = data.cpu()
+            output = model(data).data
+            prog_bar.update()
+            cnt += 1
+
+    convert(model, inplace=True)
+    torch.save({"state_dict": model.state_dict()}, path)
+    print("Quantized model has been saved.")
+    return model
+
+
+def loadQuantModel(model, path):
+    model.qconfig = torch.quantization.default_qconfig
+    model.eval()
+    prepare(model, inplace=True)
+    convert(model, inplace=True)
+    model.load_state_dict(torch.load(path)["state_dict"])
+    return model
+
 
 def test(model_cfg,
          dataset_cfg,
@@ -59,64 +90,35 @@ def test(model_cfg,
     else:
         model = call_obj(**model_cfg)
 
-    # modelQuant =  torch.jit.load("quantSTGCN.pth")
-    # results = []
-    # labels = []
-    # evaluateTime = 0
-    # prog_bar = ProgressBar(len(dataset))
+    # 原有流程
+    load_checkpoint(model, checkpoint, map_location='cpu')
+    # model = quantCalibrateModel(model, dataset_cfg, "quantSTGCN.pth")
 
-    # for data, label in data_loader:
-    #     data = data.cpu()
-    #     evaluateTime -= time()
-    #     with torch.no_grad():
-    #         output = modelQuant(data).data.cpu().numpy()
-    #     evaluateTime += time()
-
-    #     results.append(output)
-    #     labels.append(label)
-    #     for i in range(len(data)):
-    #         prog_bar.update()
-    # exit()
-    modelQuant = QuantModel(model)
-    modelQuant.eval()
-    modelQuant.qconfig = torch.quantization.default_qconfig
-    load_checkpoint(modelQuant.model, checkpoint, map_location='cpu')
-
-    prepare(modelQuant,inplace=True)
-    cnt = 0
-    for data,label in data_loader:
-        with torch.no_grad():
-            output = modelQuant(data)
-            cnt += 1
-            print(cnt)
-            if cnt >= 20:
-                break
-    convert(modelQuant,inplace=True)
-    # torch.jit.save(torch.jit.script(modelQuant),"quantSTGCN.pth")
-    # exit()
-    modelQuant = MMDataParallel(modelQuant, device_ids=range(gpus)).cpu()
+    model = MMDataParallel(model, device_ids=range(gpus)).cuda()
+    # model = loadQuantModel(model, "quantSTGCN.pth")
 
     results = []
     labels = []
     evaluateTime = 0
     prog_bar = ProgressBar(len(dataset))
+    with torch.no_grad():
 
-    for data, label in data_loader:
-        evaluateTime -= time()
-        with torch.no_grad():
-            output = model(data)
+        for data, label in data_loader:
+            evaluateTime -= time()
             output = model(data).data.cpu().numpy()
-        evaluateTime += time()
+            evaluateTime += time()
 
-        results.append(output)
-        labels.append(label)
-        for i in range(len(data)):
-            prog_bar.update()
+            results.append(output)
+            labels.append(label)
+            for i in range(len(data)):
+                prog_bar.update()
+            # if len(results) >= 10:
+                # break
 
     results = np.concatenate(results)
     labels = np.concatenate(labels)
 
-    print('Evalute Time:',evaluateTime)
+    print('Evalute Time:', evaluateTime)
     print('Top 1: {:.2f}%'.format(100 * topk_accuracy(results, labels, 1)))
     print('Top 5: {:.2f}%'.format(100 * topk_accuracy(results, labels, 5)))
 

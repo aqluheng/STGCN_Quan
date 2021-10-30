@@ -5,6 +5,7 @@ from time import time
 import torch
 import torch.nn as nn
 import numpy as np
+from torch.quantization import QuantStub, DeQuantStub
 
 class ConvTemporalGraphical(nn.Module):
     r"""The basic module for applying a graph convolution.
@@ -53,6 +54,8 @@ class ConvTemporalGraphical(nn.Module):
                               stride=(t_stride, 1),
                               dilation=(t_dilation, 1),
                               bias=bias)
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
 
     def forward(self, x, A):
         assert A.size(0) == self.kernel_size
@@ -88,7 +91,9 @@ class ConvTemporalGraphical(nn.Module):
         # AggTime = 0
         # torch.cuda.synchronize()
         # AggTime -= time()
+        x = self.dequant(x)
         x = torch.einsum('nkctv,kvw->nctw', (x, A))
+        x = self.quant(x)
         # torch.cuda.synchronize()
         # AggTime += time()
         # return x.contiguous(), A, ComTime ,AggTime
