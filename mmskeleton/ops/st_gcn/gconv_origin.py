@@ -59,6 +59,17 @@ class ConvTemporalGraphical(nn.Module):
 
     def forward(self, x, A):
         assert A.size(0) == self.kernel_size
+        x = self.quant(x)
+        x = self.conv(x)
+        x = self.dequant(x)
+
+        n, kc, t, v = x.size()
+        x = x.view(n, self.kernel_size, kc // self.kernel_size, t, v)
+        x = torch.einsum('nkctv,kvw->nctw', (x, A))
+        return x.contiguous(), A
+
+    def forward_print(self, x, A):
+        assert A.size(0) == self.kernel_size
         # torch.cuda.synchronize()
         # ComTime = 0
         # ComTime -= time()
@@ -67,8 +78,9 @@ class ConvTemporalGraphical(nn.Module):
         # inputX = inputX.reshape((300,-1))
         # print(inputX.shape)
 
-
+        # x = self.quant(x)
         x = self.conv(x)
+        # x = self.dequant(x)
         # outputX = x.cpu().numpy()[0]
         # outputX = outputX.transpose((1,0,2))
         # outputX = outputX.reshape((300,-1))
@@ -91,9 +103,7 @@ class ConvTemporalGraphical(nn.Module):
         # AggTime = 0
         # torch.cuda.synchronize()
         # AggTime -= time()
-        x = self.dequant(x)
         x = torch.einsum('nkctv,kvw->nctw', (x, A))
-        x = self.quant(x)
         # torch.cuda.synchronize()
         # AggTime += time()
         # return x.contiguous(), A, ComTime ,AggTime

@@ -2,6 +2,10 @@ from collections import OrderedDict
 import torch
 import logging
 import numpy as np
+from torch.nn import quantized
+from torch.nn.modules import activation
+from torch.nn.quantized.modules import DeQuantize, Quantize
+from torch.quantization.stubs import DeQuantStub, QuantStub
 from mmskeleton.utils import call_obj, import_obj, load_checkpoint
 from mmcv.runner import Runner
 from mmcv import Config, ProgressBar
@@ -20,24 +24,47 @@ def print_size_of_model(model, label=""):
     os.remove('temp.p')
     return size
 
+def load_myCheckpoint(model, path):
+    load_dict = torch.load(path)["state_dict"]
+    new_dict = {}
+    for k, v in load_dict.items():
+        name = k
+        if len(k) > 20:
+            if k[18:21] == "tcn":  # tcn.conv
+                if k[22] == "2":
+                    name = k[:22]+'3'+k[23:]
+                elif k[22] == "3":  # tcn.bn
+                    name = k[:22]+'5'+k[23:]
+            if k[18:26] == "residual":
+                if k[27] == "0":
+                    name = k[:27]+'1'+k[28:]
+                elif k[27] == "1":
+                    name = k[:27]+'3'+k[28:]
+        new_dict[name] = v
+    model.load_state_dict(new_dict)
+    return model
 
-def quantCalibrateModel(model, dataset_cfg, path, nCalibrateBatch = 200):
+def quantCalibrateModel(model, dataset_cfg, path):
     dataset_train_cfg = dataset_cfg.copy()
-    dataset_train_cfg["data_path"] = "./data/Kinetics/kinetics-skeleton/train_data.npy"
-    dataset_train_cfg["label_path"] = "./data/Kinetics/kinetics-skeleton/train_label.pkl"
-    dataset_train_cfg["random_choose"] = True
-    dataset_train_cfg["random_move"] = True
-    dataset_train_cfg["window_size"] = 150
+    # dataset_train_cfg["data_path"] = "./data/Kinetics/kinetics-skeleton/train_data.npy"
+    # dataset_train_cfg["label_path"] = "./data/Kinetics/kinetics-skeleton/train_label.pkl"
+    # dataset_train_cfg["random_choose"] = True
+    # dataset_train_cfg["random_move"] = True
+    # dataset_train_cfg["window_size"] = 150
     dataset_train = call_obj(**dataset_train_cfg)
     data_loader_train = torch.utils.data.DataLoader(dataset=dataset_train,
                                                     batch_size=64,
-                                                    shuffle=True,
+                                                    # shuffle=True,
                                                     num_workers=4)
-    model.qconfig = torch.quantization.default_qconfig
+    # model.qconfig = torch.quantization.default_qconfig
     model.eval()
-    prepare(model, inplace=True)
-    prog_bar = ProgressBar(nCalibrateBatch)
+    model.qconfig = torch.quantization.get_default_qconfig("fbgemm")
+
+    prepare(model, allow_list={nn.Conv2d,QuantStub,DeQuantize}, inplace=True)
+
+    nCalibrateBatch = 15
     cnt = 0
+    prog_bar = ProgressBar(nCalibrateBatch)
     for data, label in data_loader_train:
         with torch.no_grad():
             if cnt >= nCalibrateBatch:
@@ -47,17 +74,18 @@ def quantCalibrateModel(model, dataset_cfg, path, nCalibrateBatch = 200):
             prog_bar.update()
             cnt += 1
 
-    convert(model, inplace=True)
+    convert(model, mapping={nn.Conv2d: quantized.Conv2d,QuantStub:quantized.Quantize,DeQuantStub:quantized.DeQuantize}, inplace=True)
+    # print(model)
     torch.save({"state_dict": model.state_dict()}, path)
-    print("Quantized model has been saved.")
+    print("量化校准完成")
     return model
 
 
 def loadQuantModel(model, path):
     model.qconfig = torch.quantization.default_qconfig
     model.eval()
-    prepare(model, inplace=True)
-    convert(model, inplace=True)
+    prepare(model, allow_list={nn.Conv2d,QuantStub,DeQuantize}, inplace=True)
+    convert(model, mapping={nn.Conv2d: quantized.Conv2d,QuantStub:quantized.Quantize,DeQuantStub:quantized.DeQuantize}, inplace=True)
     model.load_state_dict(torch.load(path)["state_dict"])
     return model
 
@@ -89,18 +117,21 @@ def test(model_cfg,
         model = torch.nn.Sequential(*model)
     else:
         model = call_obj(**model_cfg)
+    # 原有读取checkpoint
+    # load_checkpoint(model, checkpoint, map_location='cpu')
+    
+    # 读取checkpoint,并进行量化
+    model = load_myCheckpoint(model, "testModel.pth")
+    model = quantCalibrateModel(model, dataset_cfg, "quantSTGCN.pth")
 
-    # 原有流程
-    load_checkpoint(model, checkpoint, map_location='cpu')
-    # model = quantCalibrateModel(model, dataset_cfg, "quantSTGCN.pth")
-
-    model = MMDataParallel(model, device_ids=range(gpus)).cuda()
+    # model = MMDataParallel(model, device_ids=range(gpus)).cuda()
     # model = loadQuantModel(model, "quantSTGCN.pth")
 
     results = []
     labels = []
     evaluateTime = 0
-    prog_bar = ProgressBar(len(dataset))
+    evaluteBatch = 15
+    prog_bar = ProgressBar(len(dataset) if evaluteBatch == 0 else evaluteBatch)
     with torch.no_grad():
 
         for data, label in data_loader:
@@ -110,10 +141,13 @@ def test(model_cfg,
 
             results.append(output)
             labels.append(label)
-            for i in range(len(data)):
+            if evaluteBatch == 0:
+                for i in range(len(data)):
+                    prog_bar.update()
+            else:
                 prog_bar.update()
-            # if len(results) >= 10:
-                # break
+                if len(results) >= evaluteBatch:
+                    break
 
     results = np.concatenate(results)
     labels = np.concatenate(labels)

@@ -3,6 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from time import time
+from torch.nn.quantized.modules import DeQuantize
+
+from torch.tensor import Tensor
 
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 from torch.quantization import QuantStub, DeQuantStub
@@ -26,7 +29,13 @@ timeTCN = 0
 timeAGG = 0
 timeCOM = 0
 TotalGCNTime = 0
-
+# class myConv(nn.Conv2d):
+#     def __init__(self, in_channels: int, out_channels: int, kernel_size, stride = 1, padding = 0, dilation = 1, groups: int = 1, bias: bool = True, padding_mode: str = 'zeros'):
+#         super().__init__(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias, padding_mode=padding_mode)
+#         self.quant = QuantStub()
+#         self.dequant = DeQuantStub()
+#     def forward(self, input: Tensor) -> Tensor:
+#         return self.dequant(super().forward(self.quant(input)))
 
 class ST_GCN_18(nn.Module):
     r"""Spatial temporal graph convolutional networks.
@@ -98,6 +107,8 @@ class ST_GCN_18(nn.Module):
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
         # fcn for prediction
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
         self.fcn =nn.Conv2d(256, num_class, kernel_size=1)
 
     def forward(self, x):
@@ -123,7 +134,9 @@ class ST_GCN_18(nn.Module):
         x = x.view(N, M, -1, 1, 1).mean(dim=1)
 
         # prediction
+        x = self.quant(x)
         x = self.fcn(x)
+        x = self.dequant(x)
         x = x.view(x.size(0), -1)
         # global CountNum
         # CountNum += 1
@@ -151,7 +164,9 @@ class ST_GCN_18(nn.Module):
 
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
+            print(x, self.A * importance)
             x, _ = gcn(x, self.A * importance)
+
 
         _, c, t, v = x.size()
         feature = x.view(N, M, c, t, v).permute(0, 2, 3, 4, 1)
@@ -207,6 +222,7 @@ class st_gcn_block(nn.Module):
         self.tcn = nn.Sequential(
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
+            QuantStub(),
             nn.Conv2d(
                 out_channels,
                 out_channels,
@@ -214,6 +230,7 @@ class st_gcn_block(nn.Module):
                 (stride, 1),
                 padding,
             ),
+            DeQuantStub(),
             nn.BatchNorm2d(out_channels),
             nn.Dropout(dropout, inplace=True),
         )
@@ -226,10 +243,12 @@ class st_gcn_block(nn.Module):
 
         else:
             self.residual = nn.Sequential(
+                QuantStub(),
                 nn.Conv2d(in_channels,
                           out_channels,
                           kernel_size=1,
                           stride=(stride, 1)),
+                DeQuantStub(),
                 nn.BatchNorm2d(out_channels),
             )
         self.relu = nn.ReLU(inplace=True)
@@ -238,7 +257,7 @@ class st_gcn_block(nn.Module):
         res = self.residual(x)
         x, A = self.gcn(x, A)
         x = self.tcn(x) + res
-        return x 
+        return self.relu(x), A 
     '''
     def forward(self, x, A):
         # global timeGCN
