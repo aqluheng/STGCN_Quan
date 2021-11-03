@@ -1,3 +1,4 @@
+import numpy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,13 +12,14 @@ from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 from torch.quantization import QuantStub, DeQuantStub
 
 
-
 def zero(x):
     return 0
 
+
 def zeroTensor(x):
-    x[:] = 0 
+    x[:] = 0
     return x
+
 
 def iden(x):
     return x
@@ -36,6 +38,7 @@ TotalGCNTime = 0
 #         self.dequant = DeQuantStub()
 #     def forward(self, input: Tensor) -> Tensor:
 #         return self.dequant(super().forward(self.quant(input)))
+
 
 class ST_GCN_18(nn.Module):
     r"""Spatial temporal graph convolutional networks.
@@ -109,7 +112,7 @@ class ST_GCN_18(nn.Module):
         # fcn for prediction
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
-        self.fcn =nn.Conv2d(256, num_class, kernel_size=1)
+        self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
 
     def forward(self, x):
         # data normalization
@@ -138,6 +141,7 @@ class ST_GCN_18(nn.Module):
         x = self.fcn(x)
         x = self.dequant(x)
         x = x.view(x.size(0), -1)
+        exit()
         # global CountNum
         # CountNum += 1
         # if CountNum == 620:
@@ -164,9 +168,7 @@ class ST_GCN_18(nn.Module):
 
         # forward
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            print(x, self.A * importance)
             x, _ = gcn(x, self.A * importance)
-
 
         _, c, t, v = x.size()
         feature = x.view(N, M, c, t, v).permute(0, 2, 3, 4, 1)
@@ -222,7 +224,7 @@ class st_gcn_block(nn.Module):
         self.tcn = nn.Sequential(
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            QuantStub(),
+            # QuantStub(),
             nn.Conv2d(
                 out_channels,
                 out_channels,
@@ -230,7 +232,7 @@ class st_gcn_block(nn.Module):
                 (stride, 1),
                 padding,
             ),
-            DeQuantStub(),
+            # DeQuantStub(),
             nn.BatchNorm2d(out_channels),
             nn.Dropout(dropout, inplace=True),
         )
@@ -243,21 +245,42 @@ class st_gcn_block(nn.Module):
 
         else:
             self.residual = nn.Sequential(
-                QuantStub(),
+                # QuantStub(),
                 nn.Conv2d(in_channels,
                           out_channels,
                           kernel_size=1,
                           stride=(stride, 1)),
-                DeQuantStub(),
+                # DeQuantStub(),
                 nn.BatchNorm2d(out_channels),
             )
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x, A):
+        def computeDiff(x1, x2):
+            diff = x1 - x2
+            print(abs(diff.max()),(diff**2).sum())
+        res = self.residual(x)
+        x1 = torch.rand(x.shape) * x.max() / 2
+        x2 = x - x1
+        computeDiff(x, x1+x2)
+        x, A = self.gcn(x, A)
+        x1, A = self.gcn(x1, A)
+        x2, A = self.gcn(x2, A, diff = True)
+        computeDiff(x, x1+x2)
+        
+        
+
+
+        x = self.tcn(x) + res
+        return self.relu(x), A
+    '''
+    def forward(self, x, A):
         res = self.residual(x)
         x, A = self.gcn(x, A)
         x = self.tcn(x) + res
-        return self.relu(x), A 
+        return self.relu(x), A
+    '''
+    
     '''
     def forward(self, x, A):
         # global timeGCN

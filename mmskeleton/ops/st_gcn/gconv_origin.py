@@ -57,11 +57,13 @@ class ConvTemporalGraphical(nn.Module):
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
 
-    def forward(self, x, A):
+    def forward(self, x, A, diff = False):
         assert A.size(0) == self.kernel_size
-        x = self.quant(x)
+        # x = self.quant(x)
         x = self.conv(x)
-        x = self.dequant(x)
+        if diff == True:
+            x = x - self.conv.bias.view(-1,1,1)
+        # x = self.dequant(x)
 
         n, kc, t, v = x.size()
         x = x.view(n, self.kernel_size, kc // self.kernel_size, t, v)

@@ -118,11 +118,12 @@ def test(model_cfg,
     else:
         model = call_obj(**model_cfg)
     # 原有读取checkpoint
-    # load_checkpoint(model, checkpoint, map_location='cpu')
-    
+    load_checkpoint(model, checkpoint, map_location='cpu')
+    model.eval()
+    # model.cuda()
     # 读取checkpoint,并进行量化
-    model = load_myCheckpoint(model, "testModel.pth")
-    model = quantCalibrateModel(model, dataset_cfg, "quantSTGCN.pth")
+    # model = load_myCheckpoint(model, "testModel.pth")
+    # model = quantCalibrateModel(model, dataset_cfg, "quantSTGCN.pth")
 
     # model = MMDataParallel(model, device_ids=range(gpus)).cuda()
     # model = loadQuantModel(model, "quantSTGCN.pth")
@@ -137,6 +138,7 @@ def test(model_cfg,
         for data, label in data_loader:
             evaluateTime -= time()
             output = model(data).data.cpu().numpy()
+            # output = model(data.cuda()).data.cpu().numpy()
             evaluateTime += time()
 
             results.append(output)
